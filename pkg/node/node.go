@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync/atomic"
 )
 
 type Message struct {
@@ -28,6 +29,8 @@ type Node struct {
 	closeInboundChan  chan struct{}
 	closeOutboundChan chan struct{}
 
+	idCounter atomic.Int64
+
 	handlers map[string]func(Message) error
 }
 
@@ -39,6 +42,7 @@ func NewNode(ctx context.Context) *Node {
 		closeInboundChan:  make(chan struct{}),
 		closeOutboundChan: make(chan struct{}),
 		handlers:          map[string]func(Message) error{},
+		idCounter:         atomic.Int64{},
 	}
 
 	n.Handle("init", n.init)
@@ -95,6 +99,39 @@ func (n *Node) Handle(messageType string, callback func(Message) error) {
 	n.handlers[messageType] = callback
 }
 
+func (n *Node) Send(dest string, body any) error {
+	msgId := n.idCounter.Add(1)
+
+	tempJson, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	var data map[string]any
+	err = json.Unmarshal(tempJson, &data)
+	if err != nil {
+		return err
+	}
+
+	data["msg_id"] = msgId
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	msg := Message{
+		Src:  n.id,
+		Dest: dest,
+		Body: jsonData,
+	}
+
+	n.outboundChan <- msg
+	slog.Info("sent message", "message", msg)
+
+	return nil
+}
+
 func (n *Node) Reply(msg Message, body any) error {
 	var parsedPayload GenericPayload
 
@@ -134,6 +171,10 @@ func (n *Node) Reply(msg Message, body any) error {
 
 func (n *Node) ID() string {
 	return n.id
+}
+
+func (n *Node) Neighbours() []string {
+	return n.neighbours
 }
 
 func (n *Node) handleMessage(message Message) error {

@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 
-	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
+	"github.com/dostini/dist-sys-challenges-flyio/pkg/node"
 )
 
 type broadcastRequest struct {
@@ -24,11 +24,12 @@ func newReadResponse(data []int) readResponse {
 }
 
 func main() {
-	n := maelstrom.NewNode()
+	ctx := context.Background()
+	n := node.NewNode(ctx)
 
 	var data []int
 
-	n.Handle("broadcast", func(msg maelstrom.Message) error {
+	n.Handle("broadcast", func(msg node.Message) error {
 		var req broadcastRequest
 		json.Unmarshal(msg.Body, &req)
 
@@ -37,15 +38,13 @@ func main() {
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
 
-	n.Handle("read", func(msg maelstrom.Message) error {
+	n.Handle("read", func(msg node.Message) error {
 		return n.Reply(msg, newReadResponse(data))
 	})
 
-	n.Handle("topology", func(msg maelstrom.Message) error {
+	n.Handle("topology", func(msg node.Message) error {
 		return n.Reply(msg, map[string]string{"type": "topology_ok"})
 	})
 
-	if err := n.Run(); err != nil {
-		log.Fatal(err)
-	}
+	n.Run()
 }

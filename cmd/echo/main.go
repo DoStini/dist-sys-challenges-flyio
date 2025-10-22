@@ -1,16 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 
-	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
+	"github.com/dostini/dist-sys-challenges-flyio/pkg/node"
 )
 
 func main() {
-	n := maelstrom.NewNode()
+	ctx := context.Background()
+	n := node.NewNode(ctx)
 
-	n.Handle("echo", func(msg maelstrom.Message) error {
+	n.Handle("echo", func(msg node.Message) error {
 		// Unmarshal the message body as an loosely-typed map.
 		var body map[string]any
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
@@ -24,7 +25,5 @@ func main() {
 		return n.Reply(msg, body)
 	})
 
-	if err := n.Run(); err != nil {
-		log.Fatal(err)
-	}
+	n.Run()
 }

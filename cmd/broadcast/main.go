@@ -59,10 +59,7 @@ func main() {
 				continue
 			}
 
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 
 				for {
 					_, err := n.RCP(nodeId, req)
@@ -71,7 +68,7 @@ func main() {
 					}
 					slog.Error("rcp call failed", "dest", nodeId, "req", req)
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -90,7 +87,9 @@ func main() {
 			Type:       "gossip",
 		}
 
-		handleMessage(msg, gossipRequest)
+		// This seems a bit like duct tape
+		// It should be better implemented in terms of safely exisiting and whatnot
+		go handleMessage(msg, gossipRequest)
 
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})

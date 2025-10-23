@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"sync/atomic"
+	"time"
+
+	atomicmap "github.com/dostini/dist-sys-challenges-flyio/pkg/atomic_map"
 )
 
 type Message struct {
@@ -31,6 +34,9 @@ type Node struct {
 
 	idCounter atomic.Int64
 
+	// TODO Atomic
+	repliesChans *atomicmap.AtomicMap[int64, chan Message]
+
 	handlers map[string]func(Message) error
 }
 
@@ -43,6 +49,7 @@ func NewNode(ctx context.Context) *Node {
 		closeOutboundChan: make(chan struct{}),
 		handlers:          map[string]func(Message) error{},
 		idCounter:         atomic.Int64{},
+		repliesChans:      atomicmap.NewAtomicMap[int64, chan Message](),
 	}
 
 	n.Handle("init", n.init)
@@ -99,25 +106,49 @@ func (n *Node) Handle(messageType string, callback func(Message) error) {
 	n.handlers[messageType] = callback
 }
 
-func (n *Node) Send(dest string, body any) error {
+func (n *Node) RCP(dest string, body any) (Message, error) {
+	id, err := n.Send(dest, body)
+	if err != nil {
+		return Message{}, err
+	}
+
+	slog.Info("sending RCP request", "dest", dest, "body", body)
+
+	replyChan := make(chan Message, 1)
+
+	n.repliesChans.Set(id, replyChan)
+
+	timeout := time.NewTimer(10 * time.Second)
+
+	select {
+	case msg := <-replyChan:
+		slog.Info("received reply message in channel", "msg", msg)
+		return msg, nil
+	case <-timeout.C:
+		slog.Error("timeout waiting for message reply")
+		return Message{}, fmt.Errorf("timeout")
+	}
+}
+
+func (n *Node) Send(dest string, body any) (int64, error) {
 	msgId := n.idCounter.Add(1)
 
 	tempJson, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	var data map[string]any
 	err = json.Unmarshal(tempJson, &data)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	data["msg_id"] = msgId
 
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	msg := Message{
@@ -129,7 +160,7 @@ func (n *Node) Send(dest string, body any) error {
 	n.outboundChan <- msg
 	slog.Info("sent message", "message", msg)
 
-	return nil
+	return msgId, nil
 }
 
 func (n *Node) Reply(msg Message, body any) error {
@@ -179,7 +210,8 @@ func (n *Node) Neighbours() []string {
 
 func (n *Node) handleMessage(message Message) error {
 	type genericMsg struct {
-		Type string `json:"type"`
+		Type      string `json:"type"`
+		InReplyTo int64  `json:"in_reply_to"`
 	}
 
 	var parsed genericMsg
@@ -187,6 +219,19 @@ func (n *Node) handleMessage(message Message) error {
 	err := json.Unmarshal(message.Body, &parsed)
 	if err != nil {
 		return err
+	}
+
+	if parsed.InReplyTo != 0 {
+		slog.Info("received reply message", "msg", message)
+		replyChan, found := n.repliesChans.Get(parsed.InReplyTo)
+		if !found {
+			slog.Info("reply message did not find destination", "in_reply_to", parsed.InReplyTo)
+		}
+		replyChan <- message
+		close(replyChan)
+		n.repliesChans.Delete(parsed.InReplyTo)
+
+		return nil
 	}
 
 	return n.handlers[parsed.Type](message)
@@ -265,11 +310,13 @@ func (n *Node) run() {
 		case <-n.ctx.Done():
 			return
 		case msg := <-n.inboundChan:
-			slog.Info("handling message", msg)
-			err := n.handleMessage(msg)
-			if err != nil {
-				slog.Error("error handling message", "error", err)
-			}
+			slog.Info("handling message", "msg", msg)
+			go func() {
+				err := n.handleMessage(msg)
+				if err != nil {
+					slog.Error("error handling message", "error", err)
+				}
+			}()
 		}
 	}
 }

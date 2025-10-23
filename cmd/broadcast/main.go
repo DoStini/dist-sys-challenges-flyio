@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sync"
 	"sync/atomic"
 
+	atomicmap "github.com/dostini/dist-sys-challenges-flyio/pkg/atomic_map"
 	"github.com/dostini/dist-sys-challenges-flyio/pkg/node"
 )
 
@@ -38,7 +41,7 @@ func main() {
 
 	var data []int
 
-	sequenceSet := NewAtomicMap[bool]()
+	sequenceSet := atomicmap.NewAtomicMap[string, bool]()
 	sequenceCounter := atomic.Int64{}
 
 	handleMessage := func(msg node.Message, req gossipRequest) error {
@@ -48,14 +51,30 @@ func main() {
 			return nil
 		}
 
+		wg := sync.WaitGroup{}
+
 		data = append(data, req.Message)
 		for _, nodeId := range n.Neighbours() {
 			if nodeId == msg.Src || nodeId == req.OriginNode {
 				continue
 			}
 
-			n.Send(nodeId, req)
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				for {
+					_, err := n.RCP(nodeId, req)
+					if err == nil {
+						break
+					}
+					slog.Error("rcp call failed", "dest", nodeId, "req", req)
+				}
+			}()
 		}
+
+		wg.Wait()
 
 		return nil
 	}
@@ -85,7 +104,9 @@ func main() {
 			return err
 		}
 
-		return nil
+		//n.Reply(msg, struct{}{})
+
+		return n.Reply(msg, map[string]string{"type": "gossip_ok"})
 	})
 
 	n.Handle("read", func(msg node.Message) error {

@@ -44,7 +44,9 @@ func main() {
 	sequenceSet := atomicmap.NewAtomicMap[string, bool]()
 	sequenceCounter := atomic.Int64{}
 
-	handleMessage := func(msg node.Message, req gossipRequest) error {
+	pendingGossipsWg := sync.WaitGroup{}
+
+	propagateBroadcastRequest := func(msg node.Message, req gossipRequest) error {
 		key := fmt.Sprintf("%s-%d", req.OriginNode, req.SeqID)
 		if _, found := sequenceSet.GetOrDefault(key, true); found {
 			// Ignore already processed message
@@ -89,7 +91,9 @@ func main() {
 
 		// This seems a bit like duct tape
 		// It should be better implemented in terms of safely exisiting and whatnot
-		go handleMessage(msg, gossipRequest)
+		pendingGossipsWg.Go(func() {
+			propagateBroadcastRequest(msg, gossipRequest)
+		})
 
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
@@ -98,12 +102,10 @@ func main() {
 		var req gossipRequest
 		json.Unmarshal(msg.Body, &req)
 
-		err := handleMessage(msg, req)
+		err := propagateBroadcastRequest(msg, req)
 		if err != nil {
 			return err
 		}
-
-		//n.Reply(msg, struct{}{})
 
 		return n.Reply(msg, map[string]string{"type": "gossip_ok"})
 	})
@@ -117,4 +119,6 @@ func main() {
 	})
 
 	n.Run()
+
+	pendingGossipsWg.Wait()
 }

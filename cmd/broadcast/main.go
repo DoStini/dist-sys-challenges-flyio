@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -16,11 +17,16 @@ type broadcastRequest struct {
 	Message int `json:"message"`
 }
 
+type topologyRequest struct {
+	Topology map[string][]string `json:"topology"`
+}
+
 type gossipRequest struct {
-	OriginNode string `json:"origin_node"`
-	SeqID      int    `json:"seq_id"`
-	Message    int    `json:"message"`
-	Type       string `json:"type"`
+	OriginNode string   `json:"origin_node"`
+	SeqID      int      `json:"seq_id"`
+	Message    int      `json:"message"`
+	SentTo     []string `json:"sent_to"`
+	Type       string   `json:"type"`
 }
 
 type readResponse struct {
@@ -39,6 +45,8 @@ func main() {
 	ctx := context.Background()
 	n := node.NewNode(ctx)
 
+	topology := map[string][]string{}
+
 	var data []int
 
 	sequenceSet := atomicmap.NewAtomicMap[string, bool]()
@@ -53,11 +61,14 @@ func main() {
 			return nil
 		}
 
+		alreadySent := req.SentTo
+		req.SentTo = append(req.SentTo, topology[n.ID()]...)
+
 		wg := sync.WaitGroup{}
 
 		data = append(data, req.Message)
-		for _, nodeId := range n.Neighbours() {
-			if nodeId == msg.Src || nodeId == req.OriginNode {
+		for _, nodeId := range topology[n.ID()] {
+			if nodeId == msg.Src || nodeId == req.OriginNode || slices.Contains(alreadySent, nodeId) {
 				continue
 			}
 
@@ -115,6 +126,10 @@ func main() {
 	})
 
 	n.Handle("topology", func(msg node.Message) error {
+		var req topologyRequest
+		json.Unmarshal(msg.Body, &req)
+		topology = req.Topology
+
 		return n.Reply(msg, map[string]string{"type": "topology_ok"})
 	})
 

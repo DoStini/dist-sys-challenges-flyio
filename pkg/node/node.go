@@ -310,7 +310,7 @@ func (n *Node) run() {
 		case <-n.ctx.Done():
 			return
 		case msg := <-n.inboundChan:
-			slog.Info("handling message", "msg", msg)
+			slog.Info("handling message", "src", msg.Src, "dest", msg.Dest, "body", string(msg.Body))
 			go func() {
 				err := n.handleMessage(msg)
 				if err != nil {
